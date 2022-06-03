@@ -12,7 +12,6 @@ Designed to map inserted sequences in a template sequence (plasmid or transcript
 ##### Imports #####
 import pandas as pd
 import Levenshtein
-from plotnine import *
 import re
 import numpy as np
 import sys
