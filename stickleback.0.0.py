@@ -30,8 +30,7 @@ def Initialize(args):
     '''
     #Input SAM
     print("\n\n==============================================")
-    print("============    QVEU Presents:   =============")
-    print("============     STICKLEBACK     =============")
+    print("============     stickleback     =============")
     print("==============================================\n\n")
 
     #Query String
