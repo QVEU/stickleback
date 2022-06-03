@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 '''
-stickleback.py
+stickleback.0.0.py
 
 Patrick T. Dolan
 Unit Chief, Quantitative Virology and Evolution Unit
 6/1/22
-USAGE: SamLevenshtein.py pathto/input.sam query templateFasta [] []   ( [arg] = optional argument)
+USAGE: stickleback.0.0.py pathto/input.sam query templateFasta [] []   ( [arg] = optional argument)
 Designed to map inserted sequences in a template sequence (plasmid or transcript).
 '''
 
