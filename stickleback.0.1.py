@@ -91,7 +91,7 @@ def loadSAM(inputData, minL, maxL):
     pdSam=pd.DataFrame(samInput,columns=names)
     pdSam['length']=pdSam.seq.apply(lambda s: len(s))
     pdSam=pdSam[(pdSam.length>minL)&(pdSam.length<maxL)&(pdSam.template!="*")]
-    return(pdSam[1:100000])
+    return(pdSam)
 
 def blockDist(seq_query):
     '''
@@ -100,7 +100,7 @@ def blockDist(seq_query):
         Uses numpy vectorize to speed up the computation (formerly for-loop)
 
     Arguments:
-        `seq_query` is a tuple of read and query string, passed my
+        `seq_query` is a tuple of read and query string, passed this way for 'pool'
 
     '''
 
@@ -131,7 +131,7 @@ def blockDist(seq_query):
     contextSeq="|".join([blocks[minPos-1],blocks[min(len(blocks),minPos)]])
     return(minD,minPos,matchseq,contextSeq,matchlist)
 
-def poolBlocks(query,pdSam,nthreads=8):
+def poolBlocks(query,pdSam,nthreads=8):#uses multithreading to compute the matches
     with Pool(nthreads) as p:
 
         print("1. Computing minimum distance hit position for {} reads.".format(len(pdSam)))
@@ -150,8 +150,8 @@ if __name__=="__main__":
     t0=(time.time())
     query, templateSeq, pdSam, Dtemp, cutoff, outfileName = Initialize(sys.argv)
     pdSam = poolBlocks(query,pdSam)
-    print("Mapped hits in {} reads.".format(len(pdSam[[int(i)<=int(cutoff) for i in pdSam.minD]])))
+    print("Mapped hits in {} reads.".format(np.sum([int(i)<=int(cutoff) for i in pdSam.minD])))
     pdSam.to_csv(outfileName)
     t1=(time.time())
-    print("Done in {} seconds.".format((t1-t0)))
+    print("Done in {} minutes.".format((t1-t0)/60))
     print("Wrote {}.".format(outfileName))
