@@ -9,7 +9,7 @@
 ## stickleback v0.1
 ### [SPINE](https://github.com/QVEU/SPINE_Q) Library QC by nanopore using Levenshtein distance to map insertion sites on target sequence.
 
-`stickleback` maps nanopore reads containing insertions (such as molecular handles) and then identifies the insertion site on the template molecule. 
+`stickleback` maps nanopore reads containing insertions (such as molecular handles) and then identifies the insertion site on the template molecule. Requires a merged sam file generated from mapping (e.g. minimap2). 
 
 ```
 python stickleback.0.1.py path/to/samfile.sam queryString path/to/template.fasta [minimumReadLength] [maximumReadLength]
