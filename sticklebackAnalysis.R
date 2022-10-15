@@ -1,6 +1,6 @@
 library(ggplot2)
 library(readr)
-inputdir="/Volumes/LVD_QVE/Sequencing_Data/QVEU_Seq_0018_Short_Long_Insertions/shortinsertions/no_sample/20220913_2012_MC-113212_FAT29354_04a6d4cf/fastq_pass/barcode24"
+inputdir="/Volumes/LVD_QVE/Sequencing_Data/QVEU_Seq_0017_MiSeq_InsertionalHandleLibraries/220919_M02211_0080_000000000-KCVTP/Data/Intensities/BaseCalls/NGmergedreads/Insertional_Handle_P1_RepA"
 plotStickle<-function(inputdir,name=""){
   stickle=read_csv(paste(inputdir,"/merge_stickleback.csv", sep = ""))
   pdf(paste(inputdir,"/sticklePlots_",name,".pdf",sep = ""))
