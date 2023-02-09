@@ -29,10 +29,10 @@ def Initialize(args):
     Note: replaces position if alternative minimum sites are found. Producing a 3' bias? Need to consider improvements here.
     '''
     #Input SAM
-    print("\n\n----------------=============-----------------")
-    print("--==--==--==--==   ><```º>   ==--==--==--==--=")
-    print("==--==--==--==-- stickleback --==--==--==--==-")
-    print("----------------=============-----------------\n\n")
+    print("\n\n----------------=============------------------")
+    print("--==--==--==--==   ><```º>   ==--==--==--==--==")
+    print("==--==--==--==-- stickleback --==--==--==--==--")
+    print("----------------=============------------------\n\n")
 
 
     #Check for Args
