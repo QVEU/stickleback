@@ -12,6 +12,6 @@
 `stickleback` maps nanopore reads containing insertions (such as molecular handles) and then identifies the insertion site on the template molecule. Requires a merged sam file generated from mapping (e.g. minimap2). 
 
 ```
-python stickleback.0.1.py path/to/samfile.sam queryString path/to/template.fasta [minimumReadLength] [maximumReadLength]
+python stickleback.0.3.py path/to/samfile.sam queryString path/to/template.fasta [minimumReadLength] [maximumReadLength]
 ```
 
