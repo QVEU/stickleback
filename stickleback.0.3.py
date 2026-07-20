@@ -167,7 +167,7 @@ def poolBlocks(query,pdSam,nthreads=20): #uses multithreading to compute the mat
             tempSam['insPos_v']=tempSam["minPos_v"]+26 #EDITED 4/22/23 PTD. SAME AS contextWindow EDITEDWB:+26to fix python indexing
             print("tempSam length: "+str(len()))        
         pdSamOut=pd.concat([pdSamOut,tempSam])#edited 5/2026 to avoid OOM (see above). 
-        print(pdSamOut length: "+str(len(pdSamOut)))
+        print("pdSamOut length: "+str(len(pdSamOut)))
     return(pdSamOut)
 
 if __name__=="__main__":
