@@ -162,10 +162,10 @@ def poolBlocks(query,pdSam,nthreads=20): #uses multithreading to compute the mat
             tempSam['minD'],   tempSam['minPos'],   tempSam['matchseq'],    tempSam['context'],   tempSam['matchlist']   = zip(*p.map(blockDist, [(c.upper(),query.upper()) for c in tempSam.seq]))
 
             print("2. Mapping minimum distance site on template sequence...")
-            tempSam['minD_v'], tempSam['minPos_v'], tempSam['matchseq_v'] , tempSam['context_v'], tempSam['matchlist_v'] = zip(*p.map(blockDist, [(templateSeq.upper(),c.replace("\|","").upper()) for c in tempSam.context]))
+            tempSam['minD_v'], tempSam['minPos_v'], tempSam['matchseq_v'] , tempSam['context_v'], tempSam['matchlist_v'] = zip(*p.map(blockDist, [(templateSeq.upper(),c.replace("|","").upper()) for c in tempSam.context]))
             print("done.")
             tempSam['insPos_v']=tempSam["minPos_v"]+26 #EDITED 4/22/23 PTD. SAME AS contextWindow EDITEDWB:+26to fix python indexing
-            print("tempSam length: "+str(len()))        
+            print("tempSam length: "+str(len(tempSam))        
         pdSamOut=pd.concat([pdSamOut,tempSam])#edited 5/2026 to avoid OOM (see above). 
         print("pdSamOut length: "+str(len(pdSamOut)))
     return(pdSamOut)
