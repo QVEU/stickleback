@@ -36,6 +36,7 @@ USAGE:
 ##### Imports #####
 import argparse
 import gzip
+import os
 import shutil
 import subprocess
 import sys
@@ -208,6 +209,19 @@ def main(argv=None):
     print("--==--==--==--==   ><```º>   ==--==--==--==--=")
     print("==--==-- stickleback (illumina) --==--==--==-")
     print("----------------=============-----------------\n")
+
+    # Fail fast, before the reads are streamed: a missing input or an unwritable output
+    # directory should not surface only at the final write, hours into a run.
+    outDir = os.path.dirname(os.path.abspath(args.out))
+    try:
+        os.makedirs(outDir, exist_ok=True)
+    except OSError as e:
+        sys.exit("ERROR: cannot create output directory {}: {}".format(outDir, e))
+    if not os.access(outDir, os.W_OK):
+        sys.exit("ERROR: output directory is not writable: {}".format(outDir))
+    for path in (args.r1, args.r2, args.template):
+        if path and not os.path.isfile(path):
+            sys.exit("ERROR: input file not found: {}".format(path))
 
     query = args.query.upper()
     templateSeq = readFasta(args.template)
