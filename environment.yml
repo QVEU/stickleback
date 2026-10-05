@@ -1,0 +1,18 @@
+# Conda environment for stickleback.
+#   conda env create -f environment.yml      (or: mamba / micromamba create -f environment.yml)
+#   conda activate stickleback
+name: stickleback
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  # stickleback_illumina.py
+  - pigz              # fast parallel decompression of .fastq.gz
+  - python-edlib      # only needed for --max-dist > 0
+  # nanopore scripts (stickleback.0.x.py)
+  - pandas
+  - numpy
+  - levenshtein
+  # tests
+  - pytest
