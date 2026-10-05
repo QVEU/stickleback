@@ -18,6 +18,13 @@ python stickleback.0.3.py path/to/samfile.sam queryString path/to/template.fasta
 ## Illumina (paired-end) data: `stickleback_illumina.py`
 For high-accuracy, high-depth short reads. Reads FASTQs directly (no minimap2/SAM needed), finds the query by exact match on either strand, and places the junction by looking up the flanking 16 bp in a unique k-mer index of the template. Each read pair is counted once. Roughly 4 µs per pair (~7 min per 100M pairs on one core, plus decompression).
 
+Setup (once):
+```
+conda env create -f environment.yml    # or mamba / micromamba
+conda activate stickleback
+```
+The env also covers the nanopore scripts (pandas, numpy, levenshtein). The Slurm script activates it automatically; set `STICKLEBACK_ENV` to use a different env name.
+
 ```
 python stickleback_illumina.py -1 R1.fastq.gz -2 R2.fastq.gz -q queryString -t template.fasta -o out/sample [--circular] [--max-dist 2] [--flank 16]
 ```
@@ -32,7 +39,7 @@ Outputs:
 
 Options:
 - `--circular`: plasmid templates, so junctions across the origin are placed.
-- `--max-dist N`: allow up to N edits in the query (needs `pip install edlib`). This recovers reads with a sequencing error in the query, at ~2.5× the run time. Reads matched this way have `minD > 0`; a mismatch at the query's edge can shift the call by 1 bp.
+- `--max-dist N`: allow up to N edits in the query (edlib is in the conda env). This recovers reads with a sequencing error in the query, at ~2.5× the run time. Reads matched this way have `minD > 0`; a mismatch at the query's edge can shift the call by 1 bp.
 - `--flank K`: flank length used for placement (default 16).
 
 In R, weight the histograms by `count`, e.g. `geom_histogram(aes(insPos_v, weight = count))`.

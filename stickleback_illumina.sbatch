@@ -19,9 +19,18 @@ if [ $# -lt 5 ]; then
 fi
 R1=$1; R2=$2; QUERY=$3; TEMPLATE=$4; OUT=$5; shift 5
 
-module purge
-module load python
-module load pigz 2>/dev/null || true   # optional: faster decompression
+# Environment: the "stickleback" conda env (see environment.yml); set STICKLEBACK_ENV to use another.
+# If your cluster provides conda as a module, load it first, e.g. module load miniconda3
+set +u   # conda's activation scripts reference unset variables
+if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+    conda activate "${STICKLEBACK_ENV:-stickleback}"
+else
+    echo "conda not found; falling back to the cluster python module" >&2
+    module load python
+    module load pigz 2>/dev/null || true
+fi
+set -u
 
 mkdir -p "$(dirname "$OUT")"
 SCRIPT_DIR=${STICKLEBACK_DIR:-$SLURM_SUBMIT_DIR}
