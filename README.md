@@ -16,7 +16,7 @@ python stickleback.0.3.py path/to/samfile.sam queryString path/to/template.fasta
 ```
 
 ## Illumina (paired-end) data: `stickleback_illumina.py`
-For high-accuracy, high-depth short reads. Reads FASTQs directly (no minimap2/SAM needed), finds the query by exact match on either strand, and places the junction by looking up the flanking 16 bp in a unique k-mer index of the template. Each read pair is counted once. Roughly 4 µs per pair (~7 min per 100M pairs on one core, plus decompression).
+For high-accuracy, high-depth short reads. Reads FASTQs directly (no minimap2/SAM needed), finds the query by exact match on either strand, and places the junction by looking up the flanking 16 bp in a unique k-mer index of the template. Each read pair is counted once. Reads are mapped in worker processes, so the run scales with the cores it is given: roughly 8 µs per pair on one core and 5 µs per pair on four (~4 min per 30M pairs), plus decompression.
 
 Setup (once):
 ```
@@ -39,8 +39,10 @@ Outputs:
 
 Options:
 - `--circular`: plasmid templates, so junctions across the origin are placed.
-- `--max-dist N`: allow up to N edits in the query (edlib is in the conda env). This recovers reads with a sequencing error in the query, at ~2.5× the run time. Reads matched this way have `minD > 0`; a mismatch at the query's edge can shift the call by 1 bp.
+- `--max-dist N`: allow up to N edits in the query (edlib is in the conda env). This recovers reads with a sequencing error in the query, at ~1.7× the run time on one core (a seed prefilter skips edlib for the reads that cannot match, without losing any that can). Reads matched this way have `minD > 0`; a mismatch at the query's edge can shift the call by 1 bp.
 - `--flank K`: flank length used for placement (default 16).
+- `--procs N`: processes used to map reads. The default is one per core less one (from `SLURM_CPUS_PER_TASK` on a cluster), which is what the Slurm script asks for; `--procs 1` maps in the main process. The counts do not depend on this.
+- `--threads N`: pigz threads per input file (default 2).
 
 In R, weight the histograms by `count`, e.g. `geom_histogram(aes(insPos_v, weight = count))`.
 

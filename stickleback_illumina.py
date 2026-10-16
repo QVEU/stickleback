@@ -19,6 +19,11 @@ How it works (no alignment / SAM needed):
        template position of the junction and the orientation of the insert.
     4. In paired-end mode both mates are examined and each pair is counted once.
 
+Reads are parsed in blocks and mapped in worker processes (--procs), so a run scales with
+the cores it is given. With --max-dist > 0 a seed prefilter (pigeonhole: a query of length
+Q matching with at most d edits must contain one of its d+1 non-overlapping Q/(d+1)-mers
+exactly) skips edlib for the reads that cannot match, at no cost in sensitivity.
+
 Output:
     <prefix>_sites.csv    one row per (insPos_v, orientation, minD) with the number of pairs
     <prefix>_summary.txt  read/pair accounting
@@ -35,6 +40,7 @@ USAGE:
 
 ##### Imports #####
 import argparse
+import collections
 import gzip
 import os
 import shutil
@@ -42,6 +48,15 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from multiprocessing import Pool
+
+# Reads are handed to the workers in blocks of this many records.
+BLOCK_RECORDS = 20_000
+
+STATUSES = ("placed", "unplaced", "discordant", "noQuery")
+
+class InputError(Exception):
+    '''A malformed or inconsistent input: reported to the user, not as a traceback.'''
 
 COMP = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 
@@ -65,16 +80,30 @@ def openFastq(path, threads=2):
         return proc.stdout
     return gzip.open(path, "rt")
 
-def fastqRecords(handle):
-    '''Yields (name, seq) from a FASTQ stream.'''
+def fastqBlocks(handle, path, nRecords=None):
+    '''Yields (headers, seqs) lists of up to nRecords records each. The blocks are the unit of
+    work handed to the mapping processes; reading them with readline() keeps the decompressor
+    busy, since it can go on filling the pipe while the block is mapped.'''
+    nRecords = nRecords or BLOCK_RECORDS
+    readline = handle.readline
+    headers, seqs = [], []
     while True:
-        header = handle.readline()
+        header = readline()
         if not header:
-            return
-        seq = handle.readline().rstrip()
-        handle.readline()
-        handle.readline()
-        yield header, seq
+            break
+        seq = readline()
+        readline()
+        if not readline():
+            if not header.strip() and not seq.strip():
+                break                           # stray blank line(s) at the end of the file
+            raise InputError("ERROR: truncated FASTQ record at the end of {}".format(path))
+        headers.append(header)
+        seqs.append(seq.rstrip())
+        if len(seqs) == nRecords:
+            yield headers, seqs
+            headers, seqs = [], []
+    if seqs:
+        yield headers, seqs
 
 def readID(header):
     '''Read name without '@', comment, or /1 /2 suffix, for pairing checks.'''
@@ -112,28 +141,48 @@ class Mapper:
         self.circular = circular
         self.maxDist = maxDist
         self.index, self.nAmbiguous = buildIndex(templateSeq, k, circular)
+        self.seeds = ()
         if maxDist > 0:
             import edlib  # only needed for fuzzy matching
             self.edlib = edlib
+            # Pigeonhole prefilter: maxDist edits can touch at most maxDist of the
+            # maxDist+1 non-overlapping seeds below, so a read that matches the query
+            # within maxDist edits contains at least one of them exactly. A read with
+            # none of them cannot match, and is skipped without calling edlib.
+            seedLen = self.qL // (maxDist + 1)
+            if seedLen > 1:
+                seeds = [query[i * seedLen:(i + 1) * seedLen] for i in range(maxDist + 1)]
+                self.seeds = tuple(seeds + [revcomp(s) for s in seeds])
 
     def findQuery(self, read):
         '''Returns (read oriented so the query is forward, start, end, editDistance) or None.'''
+        qL = self.qL
         p = read.find(self.q)
         if p >= 0:
-            return read, p, p + self.qL, 0
+            return read, p, p + qL, 0
         p = read.find(self.qrc)
         if p >= 0:
             read = revcomp(read)
-            p = len(read) - p - self.qL
-            return read, p, p + self.qL, 0
-        if self.maxDist == 0:
+            p = len(read) - p - qL
+            return read, p, p + qL, 0
+        maxDist = self.maxDist
+        if maxDist == 0:
+            return None
+        if self.seeds and not any(seed in read for seed in self.seeds):
             return None
         best = None
         for seq in (read, revcomp(read)):
-            hit = self.edlib.align(self.q, seq, mode="HW", task="locations", k=self.maxDist)
-            if hit["editDistance"] >= 0 and (best is None or hit["editDistance"] < best[3]):
-                s, e = hit["locations"][0]
-                best = (seq, s, e + 1, hit["editDistance"])
+            hit = self.edlib.align(self.q, seq, mode="HW", task="locations", k=maxDist)
+            d = hit["editDistance"]
+            if d < 0 or d > maxDist:   # no hit; an empty read reports d = len(query) > maxDist
+                continue
+            if best is not None and d >= best[3]:
+                continue
+            locations = hit["locations"]
+            if not locations or locations[0][0] is None or locations[0][1] is None:
+                continue
+            s, e = locations[0]
+            best = (seq, s, e + 1, d)
         return best
 
     def junction(self, kmer, side):
@@ -160,8 +209,9 @@ class Mapper:
             return "noQuery", None, None
         seq, s, e, d = found
         k = self.k
-        left = self.junction(seq[s - k:s], "left") if s >= k else None
-        right = self.junction(seq[e:e + k], "right") if len(seq) - e >= k else None
+        junction = self.junction
+        left = junction(seq[s - k:s], "left") if s >= k else None
+        right = junction(seq[e:e + k], "right") if len(seq) - e >= k else None
         if left and right and left != right:
             return "discordant", None, d
         hit = left or right
@@ -185,6 +235,94 @@ def combinePair(m1, m2):
         return "unplaced", None, None
     return "noQuery", None, None
 
+##### Blocks of reads #####
+# One Mapper per worker process, built once by the pool initializer: the k-mer index is
+# the same for every block and too big to ship with each one.
+WORKER = {}
+R1KEY = {status: "R1_" + status for status in STATUSES}
+R2KEY = {status: "R2_" + status for status in STATUSES}
+
+def initWorker(query, templateSeq, k, circular, maxDist):
+    WORKER["mapper"] = Mapper(query, templateSeq, k, circular, maxDist)
+
+def checkPairing(first, headers1, headers2):
+    '''Raises unless the two mate files hold the same reads in the same order. The common case
+    is checked in one pass through zip(); the offending read is only located if one is found.'''
+    if all(readID(h1) == readID(h2) for h1, h2 in zip(headers1, headers2)):
+        return
+    for i, (h1, h2) in enumerate(zip(headers1, headers2)):
+        if readID(h1) != readID(h2):
+            raise InputError("ERROR: R1/R2 out of sync at read {}: {} vs {}".format(
+                first + i + 1, readID(h1), readID(h2)))
+
+def mapBlock(block):
+    '''Maps one block of reads, or of read pairs, to status and site counts. Runs in a worker
+    process, so it returns Counters to merge rather than touching shared state.'''
+    first, headers1, seqs1, headers2, seqs2 = block
+    mapRead = WORKER["mapper"].mapRead
+    stats = Counter()
+    sites = Counter()
+    if seqs2 is None:
+        for seq in seqs1:
+            status, site, d = mapRead(seq)
+            stats[status] += 1
+            if site:
+                sites[site + (d,)] += 1
+        return len(seqs1), stats, sites
+    checkPairing(first, headers1, headers2)
+    for s1, s2 in zip(seqs1, seqs2):
+        m1 = mapRead(s1)
+        m2 = mapRead(s2)
+        stats[R1KEY[m1[0]]] += 1
+        stats[R2KEY[m2[0]]] += 1
+        status, site, d = combinePair(m1, m2)
+        stats[status] += 1
+        if site:
+            sites[site + (d,)] += 1
+    return len(seqs1), stats, sites
+
+def readBlocks(r1Path, r2Path, threads):
+    '''Yields blocks of reads (single-end) or of mate-paired reads, in file order.'''
+    blocks1 = fastqBlocks(openFastq(r1Path, threads), r1Path)
+    blocks2 = fastqBlocks(openFastq(r2Path, threads), r2Path) if r2Path else None
+    first = 0
+    for headers1, seqs1 in blocks1:
+        if blocks2 is None:
+            yield first, None, seqs1, None, None     # headers are only used for pairing
+        else:
+            headers2, seqs2 = next(blocks2, (None, None))
+            if seqs2 is None or len(seqs2) != len(seqs1):
+                # Mates that have gone out of step make for a more useful error than a count,
+                # and are the usual reason for one file running out first.
+                checkPairing(first, headers1, headers2 or [])
+                raise InputError("ERROR: R2 has {} reads than R1.".format(
+                    "fewer" if seqs2 is None or len(seqs2) < len(seqs1) else "more"))
+            yield first, headers1, seqs1, headers2, seqs2
+        first += len(seqs1)
+    if blocks2 is not None and next(blocks2, None) is not None:
+        raise InputError("ERROR: R2 has more reads than R1.")
+
+def mapInPool(pool, blocks, inFlight):
+    '''Maps blocks in the pool, keeping at most inFlight of them outstanding. Pool.imap feeds
+    its whole input to the workers as fast as the queue takes it, which for a large FASTQ
+    means reading the file into memory faster than it can be mapped.'''
+    pending = collections.deque()
+    for block in blocks:
+        pending.append(pool.apply_async(mapBlock, (block,)))
+        while len(pending) >= inFlight:
+            yield pending.popleft().get()
+    while pending:
+        yield pending.popleft().get()
+
+def workerCount(requested):
+    '''Worker processes to map with: one per core, less the one the parent needs to read and
+    decompress, unless the user asked for a specific number. More than a handful does not
+    help, since the parent has to parse the FASTQ for all of them.'''
+    if requested > 0:
+        return requested
+    cores = os.environ.get("SLURM_CPUS_PER_TASK") or os.cpu_count() or 1
+    return max(1, min(8, int(cores) - 1))
+
 ##### Main #####
 def parseArgs(argv):
     p = argparse.ArgumentParser(description="Map query insertion sites in a template from Illumina reads.")
@@ -199,6 +337,9 @@ def parseArgs(argv):
                    help="max edit distance for query matching; >0 enables edlib fallback (default 0 = exact)")
     p.add_argument("--circular", action="store_true", help="template is circular (e.g. plasmid)")
     p.add_argument("--threads", type=int, default=2, help="pigz threads per input file (default 2)")
+    p.add_argument("--procs", type=int, default=0,
+                   help="worker processes used to map reads (default: one per core less one, "
+                        "from SLURM_CPUS_PER_TASK when set, at most 8; 1 maps in this process)")
     p.add_argument("--progress", type=int, default=5_000_000, help="report every N reads/pairs")
     return p.parse_args(argv)
 
@@ -235,35 +376,38 @@ def main(argv=None):
         print("WARNING: query occurs in the template itself; reads from uninserted template will be counted.")
     print("Mode: {}".format("paired-end" if paired else "single-end"))
 
+    procs = workerCount(args.procs)
+    print("Mapping processes: {}".format(procs))
+
     stats = Counter()
     sites = Counter()
-    r1 = fastqRecords(openFastq(args.r1, args.threads))
-    if paired:
-        r2 = fastqRecords(openFastq(args.r2, args.threads))
     n = 0
-    for h1, s1 in r1:
-        call = mapper.mapRead(s1)
-        if paired:
-            try:
-                h2, s2 = next(r2)
-            except StopIteration:
-                sys.exit("ERROR: R2 has fewer reads than R1.")
-            if readID(h1) != readID(h2):
-                sys.exit("ERROR: R1/R2 out of sync at read {}: {} vs {}".format(n + 1, readID(h1), readID(h2)))
-            m2 = mapper.mapRead(s2)
-            stats["R1_" + call[0]] += 1
-            stats["R2_" + m2[0]] += 1
-            call = combinePair(call, m2)
-        status, site, d = call
-        stats[status] += 1
-        if site:
-            sites[site + (d,)] += 1
-        n += 1
-        if n % args.progress == 0:
-            print("  {:,} {} processed, {:,} placed ({:.1f} min)".format(
-                n, "pairs" if paired else "reads", stats["placed"], (time.time() - t0) / 60), flush=True)
-    if paired and next(r2, None) is not None:
-        sys.exit("ERROR: R2 has more reads than R1.")
+    reported = 0
+    blocks = readBlocks(args.r1, args.r2 if paired else None, args.threads)
+    pool = None
+    try:
+        if procs > 1:
+            pool = Pool(procs, initializer=initWorker,
+                        initargs=(query, templateSeq, args.flank, args.circular, args.max_dist))
+            results = mapInPool(pool, blocks, procs + 2)
+        else:
+            WORKER["mapper"] = mapper
+            results = map(mapBlock, blocks)
+        for count, blockStats, blockSites in results:
+            n += count
+            stats += blockStats
+            sites += blockSites
+            if args.progress and n - reported >= args.progress:
+                reported = n
+                print("  {:,} {} processed, {:,} placed ({:.1f} min)".format(
+                    n, "pairs" if paired else "reads", stats["placed"],
+                    (time.time() - t0) / 60), flush=True)
+    except InputError as e:
+        sys.exit(str(e))
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
 
     sitesFile = args.out + "_sites.csv"
     with open(sitesFile, "w") as out:
@@ -274,11 +418,11 @@ def main(argv=None):
     unit = "pairs" if paired else "reads"
     lines = ["mode\t{}".format("paired-end" if paired else "single-end"),
              "total_{}\t{}".format(unit, n)]
-    for status in ("placed", "unplaced", "discordant", "noQuery"):
+    for status in STATUSES:
         lines.append("{}_{}\t{}\t{:.2%}".format(status, unit, stats[status], stats[status] / max(n, 1)))
     if paired:
         for mate in ("R1", "R2"):
-            for status in ("placed", "unplaced", "discordant", "noQuery"):
+            for status in STATUSES:
                 lines.append("{}_{}\t{}".format(mate, status, stats[mate + "_" + status]))
     lines.append("distinct_sites\t{}".format(len({s[:2] for s in sites})))
     lines.append("minutes\t{:.2f}".format((time.time() - t0) / 60))

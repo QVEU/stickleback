@@ -34,6 +34,8 @@ set -u
 
 mkdir -p "$(dirname "$OUT")"
 SCRIPT_DIR=${STICKLEBACK_DIR:-$SLURM_SUBMIT_DIR}
-# R1 and R2 are each decompressed by pigz in parallel with the Python process.
+# R1 and R2 are each decompressed by pigz in parallel with the Python process, which maps the
+# reads in SLURM_CPUS_PER_TASK - 1 worker processes (its own default; raise --cpus-per-task to
+# go faster).
 python "$SCRIPT_DIR/stickleback_illumina.py" -1 "$R1" -2 "$R2" -q "$QUERY" -t "$TEMPLATE" -o "$OUT" \
-    --threads $(( ${SLURM_CPUS_PER_TASK:-4} >= 2 ? ${SLURM_CPUS_PER_TASK:-4} / 2 : 1 )) "$@"
+    --threads 2 "$@"
