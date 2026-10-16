@@ -211,7 +211,11 @@ def main(argv=None):
     print("----------------=============-----------------\n")
 
     # Fail fast, before the reads are streamed: a missing input or an unwritable output
-    # directory should not surface only at the final write, hours into a run.
+    # directory should not surface only at the final write, hours into a run. Inputs are
+    # checked first so a run that cannot start leaves no empty output directory behind.
+    for path in (args.r1, args.r2, args.template):
+        if path and not os.path.isfile(path):
+            sys.exit("ERROR: input file not found: {}".format(path))
     outDir = os.path.dirname(os.path.abspath(args.out))
     try:
         os.makedirs(outDir, exist_ok=True)
@@ -219,9 +223,6 @@ def main(argv=None):
         sys.exit("ERROR: cannot create output directory {}: {}".format(outDir, e))
     if not os.access(outDir, os.W_OK):
         sys.exit("ERROR: output directory is not writable: {}".format(outDir))
-    for path in (args.r1, args.r2, args.template):
-        if path and not os.path.isfile(path):
-            sys.exit("ERROR: input file not found: {}".format(path))
 
     query = args.query.upper()
     templateSeq = readFasta(args.template)
