@@ -89,6 +89,91 @@ def test_cli_paired():
         assert set(counted) <= truthSites
         assert sum(counted.values()) > 0.9 * sum(1 for p in pairs if p[3])
 
+def writeFastq(path, records):
+    with gzip.open(path, "wt") as f:
+        for name, seq in records:
+            f.write("@{} 1:N:0\n{}\n+\n{}\n".format(name, seq, "I" * len(seq)))
+
+def test_empty_read_with_max_dist():
+    '''A zero-length read (adapter-trimmed to nothing) must not crash the fuzzy path.'''
+    try:
+        import edlib  # noqa: F401
+    except ImportError:
+        print("test_empty_read_with_max_dist skipped (no edlib)")
+        return
+    rng = random.Random(4)
+    template = "".join(rng.choice(B) for _ in range(2000))
+    m = sb.Mapper(QUERY, template, 16, False, 2)
+    assert m.mapRead("")[0] == "noQuery"
+    assert m.mapRead("ACGT")[0] == "noQuery"
+    # the query with one substitution is still found, and placed at the right site
+    j = 700
+    read = template[j - 60:j] + QUERY[:12] + "T" + QUERY[13:] + template[j:j + 60]
+    status, site, d = m.mapRead(read)
+    assert (status, site) == ("placed", (j + 1, "+")), (status, site, d)
+    assert d == 1, d
+
+def test_seed_prefilter_keeps_every_hit():
+    '''The pigeonhole prefilter may not cost a single read: same calls with it and without.'''
+    try:
+        import edlib  # noqa: F401
+    except ImportError:
+        print("test_seed_prefilter_keeps_every_hit skipped (no edlib)")
+        return
+    rng = random.Random(5)
+    template = "".join(rng.choice(B) for _ in range(3000))
+    pairs = simulate(rng, template, 2000, False, err=0.02)   # enough errors to need edlib
+    filtered = sb.Mapper(QUERY, template, 16, False, 2)
+    assert filtered.seeds, "prefilter is not active"
+    unfiltered = sb.Mapper(QUERY, template, 16, False, 2)
+    unfiltered.seeds = ()
+    fuzzy = 0
+    for _, r1, r2, _ in pairs:
+        for read in (r1, r2):
+            a, b = filtered.mapRead(read), unfiltered.mapRead(read)
+            assert a == b, (read, a, b)
+            fuzzy += a[2] not in (None, 0)
+    assert fuzzy > 50, "{} reads needed the fuzzy path; the test is not exercising it".format(fuzzy)
+
+def test_procs_do_not_change_the_counts():
+    '''Mapping in worker processes must give exactly the same output as mapping in one.'''
+    rng = random.Random(6)
+    template = "".join(rng.choice(B) for _ in range(3000))
+    pairs = simulate(rng, template, 3000, False)
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "t.fa"), "w") as f:
+            f.write(">t\n" + template + "\n")
+        for mate, idx in (("R1", 1), ("R2", 2)):
+            writeFastq(os.path.join(d, mate + ".fastq.gz"), [(p[0], p[idx]) for p in pairs])
+        outputs = []
+        for procs in ("1", "3"):
+            out = os.path.join(d, "s" + procs)
+            sb.main(["-1", os.path.join(d, "R1.fastq.gz"), "-2", os.path.join(d, "R2.fastq.gz"),
+                     "-q", QUERY, "-t", os.path.join(d, "t.fa"), "-o", out,
+                     "--procs", procs, "--progress", "500"])
+            summary = [l for l in open(out + "_summary.txt") if not l.startswith("minutes")]
+            outputs.append((open(out + "_sites.csv").read(), summary))
+        assert outputs[0] == outputs[1], "--procs changed the result"
+
+def test_out_of_sync_mates_are_caught():
+    rng = random.Random(7)
+    template = "".join(rng.choice(B) for _ in range(2000))
+    pairs = simulate(rng, template, 60, False)
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "t.fa"), "w") as f:
+            f.write(">t\n" + template + "\n")
+        writeFastq(os.path.join(d, "R1.fastq.gz"), [(p[0], p[1]) for p in pairs])
+        writeFastq(os.path.join(d, "R2.fastq.gz"), [(p[0], p[2]) for p in pairs[:30] + pairs[31:]])
+        args = ["-1", os.path.join(d, "R1.fastq.gz"), "-2", os.path.join(d, "R2.fastq.gz"),
+                "-q", QUERY, "-t", os.path.join(d, "t.fa"), "-o", os.path.join(d, "s"),
+                "--procs", "1"]
+        try:
+            sb.main(args)
+        except SystemExit as e:
+            assert "out of sync at read 31" in str(e), e
+        else:
+            assert False, "a dropped R2 record went unnoticed"
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
